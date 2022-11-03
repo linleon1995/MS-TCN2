@@ -4,6 +4,8 @@
 import numpy as np
 import argparse
 
+from utils import VisActionSeg
+
 
 def read_file(path):
     with open(path, 'r') as f:
@@ -93,7 +95,7 @@ def f_score(recognized, ground_truth, overlap, bg_class=["background"]):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--dataset', default="gtea")
+    parser.add_argument('--dataset', default="breakfast")
     parser.add_argument('--split', default='1')
 
     args = parser.parse_args()
@@ -110,6 +112,7 @@ def main():
     correct = 0
     total = 0
     edit = 0
+    vis = VisActionSeg(None)
 
     for vid in list_of_videos:
         gt_file = ground_truth_path + vid
@@ -117,6 +120,7 @@ def main():
 
         recog_file = recog_path + vid.split('.')[0]
         recog_content = read_file(recog_file).split('\n')[1].split()
+        vis.single_vis(gt_content)
 
         for i in range(len(gt_content)):
             total += 1
