@@ -1,49 +1,10 @@
-import cv2
-
-LAB_RTSP = 'rtsp://root:a1s2d3f4@192.168.50.161:554/live.sdp'
-
-
-# def main(stream_src):
-#     vidCap = cv2.VideoCapture(stream_src)
-#     # vidCap.set(cv2.CAP_PROP_FRAME_WIDTH, 1080)
-#     # vidCap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1920)
-
-#     # cv2.namedWindow('image_display', cv2.WINDOW_NORMAL)
-
-#     fourcc = cv2.VideoWriter_fourcc("m", "p", "4", "v")
-#     out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (1920, 1080), 3)
-
-#     try:
-#         while vidCap.isOpened():
-#             ret, frame = vidCap.read()
-#             if not ret:
-#                 print("Can't receive frame (stream end?). Exiting ...")
-#                 break
-
-#             out.write(frame)
-#             cv2.imshow('image_display', frame)
-#             if cv2.waitKey(1) == ord('q'):
-#                 break
-
-#         vidCap.release()
-#         out.release()
-#         cv2.destroyAllWindows()
-#         print(4)
-#     except:
-        
-#         vidCap.release()
-#         out.release()
-#         cv2.destroyAllWindows()
-#         print(3)
-
-
-# if __name__ == '__main__':
-#     main(LAB_RTSP)
-
-
+# TODO: argparse
+# TODO: main function
 from multiprocessing import Process, Queue
-import cv2
 from datetime import datetime
+
+import cv2
+
 
 def image_save(taskqueue, width, height, fps, frames_per_file):
 
@@ -72,13 +33,14 @@ def image_save(taskqueue, width, height, fps, frames_per_file):
             # 建立 VideoWriter 物件（以時間命名）
             now = datetime.now()
             timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
-            writer = cv2.VideoWriter(f'output-{timestamp}.mp4', fourcc, fps, (width, height))
+            writer = cv2.VideoWriter(f'videos/output-{timestamp}.mp4', fourcc, fps, (width, height))
 
         # 儲存影像
         writer.write(image)
 
     # 釋放資源
     writer.release()
+
 
 if __name__ == '__main__':
 
@@ -99,11 +61,14 @@ if __name__ == '__main__':
     # 計數器
     frame_counter = 0
 
+    total_time = 100 * 3600 # 30 seconds per process
+    file_time = 10 * 60 # 10 seconds per file
+
     # 總錄製幀數（30 秒鐘）
-    total_frames = fps * 30
+    total_frames = fps * total_time
 
     # 每個檔案的幀數（10 秒鐘）
-    frames_per_file = fps * 10
+    frames_per_file = fps * file_time
 
     # 建立並執行工作行程
     proc = Process(target=image_save, args=(taskqueue, width, height, fps, frames_per_file))

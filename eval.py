@@ -120,7 +120,8 @@ def main():
 
         recog_file = recog_path + vid.split('.')[0]
         recog_content = read_file(recog_file).split('\n')[1].split()
-        vis.single_vis(gt_content)
+        # vis.single_vis(gt_content)
+        vis.single_vis(recog_content)
 
         for i in range(len(gt_content)):
             total += 1

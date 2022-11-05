@@ -138,13 +138,13 @@ def main():
 
     # XXX: Check sampler working
     # XXX: valid dataset
+    def align_video_length(batch):
+        print(batch)
+        return batch
+
     list_of_samples = read_data(vid_list_file)
     dataset = VAS_Dataset(num_classes, actions_dict, gt_path, features_path, sample_rate, list_of_samples)
-    sampler = RandomSampler(data_source=dataset)
-    batch_sampler = WeightedFixedBatchSampler(
-        sampler, batch_size=2, drop_last=True, list_of_samples=list_of_samples
-    )
-    train_loader = DataLoader(dataset=dataset, batch_sampler=batch_sampler)
+    train_loader = DataLoader(dataset=dataset, collate_fn=align_video_length, batch_size=2)
 
 
     # # data
