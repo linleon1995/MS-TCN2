@@ -13,41 +13,63 @@ from torchvision.datasets import MNIST
 from torchvision import transforms
 import pytorch_lightning as pl
 from torch import optim
+import numpy as np
+from pytorch_lightning.callbacks import RichProgressBar
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from model import Trainer
-from batch_gen import BatchGenerator, VAS_Dataset, SequenceAlignSampler, WeightedFixedBatchSampler, read_data
+from batch_gen import BatchGenerator, VAS_Dataset, read_data
 from model import MS_TCN2
 
+
+def align_video_length(batch):
+    print(batch)
+    seq_length_list = [sample['seq_length'] for sample in batch]
+    N = len(batch) # batch_size
+    C = batch[0]['input'].shape[0] # feature size
+    L = max(seq_length_list) # sequence length
+    K = batch[0]['mask'].shape[0] # number of class
+
+    batch_input = torch.zeros([N, C, L])
+    batch_target = -100 * torch.ones([N, L])
+    batch_mask = torch.zeros([N, K, L])
+    for idx, sample in enumerate(batch):
+        sample_length = seq_length_list[idx]
+        batch_input[idx, :, :sample_length] = torch.from_numpy(np.array(sample['input'], np.float32))
+        batch_target[idx, :sample_length] = torch.from_numpy(np.array(sample['target'], np.int64))
+        batch_mask[idx, :, :sample_length] = torch.from_numpy(np.array(sample['mask'], np.float32))
     
+    return batch_input, batch_target, batch_mask
+
+
+    
+# XXX: valid dataset
+# XXX: inference?
+# XXX: loss
 class PlModel(pl.LightningModule): 
-	def __init__(self, model, optimizer, lr):
+	def __init__(self, model, optimizer, lr, loss_func):
 		super().__init__()
 		self.model = model
 		self.optimizer = optimizer
 		self.lr = lr
-
-	def forward(self, x):
-		y = self.model(x)
-		return y
+		self.loss_func = loss_func
 		
 	def configure_optimizers(self):
 		return self.optimizer(self.parameters(), lr=self.lr)
 		
 	def training_step(self, train_batch, batch_idx):
-		x, y = train_batch
-		x = x.view(x.size(0), -1)
-		z = self.encoder(x)
-		x_hat = self.decoder(z)
-		loss = F.mse_loss(x_hat, x)
+		input, target, mask = train_batch
+		input = input.view(input.size(0), -1)
+		pred = self.model(input)
+		loss = self.loss_func(target, pred)
 		self.log('train_loss', loss)
 		return loss
 		
 	def validation_step(self, val_batch, batch_idx):
-		x, y = val_batch
-		x = x.view(x.size(0), -1)
-		z = self.encoder(x)
-		x_hat = self.decoder(z)
-		loss = F.mse_loss(x_hat, x)
+		input, target, mask = val_batch
+		input = input.view(input.size(0), -1)
+		pred = self.model(input)
+		loss = self.loss_func(target, pred)
 		self.log('val_loss', loss)
 
 
@@ -60,12 +82,12 @@ def main():
     torch.backends.cudnn.deterministic = True
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', default='predict')
+    parser.add_argument('--action', default='train')
     parser.add_argument('--dataset', default="breakfast")
     parser.add_argument('--split', default='1')
 
     parser.add_argument('--features_dim', default='2048', type=int)
-    parser.add_argument('--bz', default='1', type=int)
+    parser.add_argument('--bz', default='4', type=int)
     parser.add_argument('--lr', default='0.0005', type=float)
 
 
@@ -76,6 +98,8 @@ def main():
     parser.add_argument('--num_layers_PG', type=int, default=11)
     parser.add_argument('--num_layers_R', type=int, default=10)
     parser.add_argument('--num_R', type=int, default=3)
+
+    parser.add_argument('--patience', type=int, default=20)
 
     args = parser.parse_args()
 
@@ -119,6 +143,8 @@ def main():
         actions_dict[a.split()[1]] = int(a.split()[0])
 
     num_classes = len(actions_dict)
+
+    patience = args.patience
     # trainer = Trainer(num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, num_classes, args.dataset, args.split)
     # if args.action == "train":
     #     batch_gen = BatchGenerator(num_classes, actions_dict, gt_path, features_path, sample_rate)
@@ -136,15 +162,16 @@ def main():
     # train_loader = DataLoader(mnist_train, batch_size=32)
     # val_loader = DataLoader(mnist_val, batch_size=32)
 
-    # XXX: Check sampler working
-    # XXX: valid dataset
-    def align_video_length(batch):
-        print(batch)
-        return batch
 
+    # XXX: valid dataset
     list_of_samples = read_data(vid_list_file)
-    dataset = VAS_Dataset(num_classes, actions_dict, gt_path, features_path, sample_rate, list_of_samples)
-    train_loader = DataLoader(dataset=dataset, collate_fn=align_video_length, batch_size=2)
+    dataset = VAS_Dataset(
+        num_classes, actions_dict, gt_path, features_path, sample_rate, list_of_samples)
+    train_loader = DataLoader(dataset=dataset, collate_fn=align_video_length, batch_size=bz)
+
+    valid_dataset = VAS_Dataset(
+        num_classes, actions_dict, gt_path, features_path, sample_rate, list_of_samples)
+    valid_loader = DataLoader(dataset=valid_dataset, collate_fn=align_video_length, batch_size=bz)
 
 
     # # data
@@ -164,10 +191,27 @@ def main():
     optimizer = optim.Adam
     model = PlModel(model, optimizer, lr)
 
+    
     # training
     # XXX: pl.Trainer arguments
-    trainer = pl.Trainer(gpus=[0], precision=16, limit_train_batches=0.5)
-    trainer.fit(model, train_loader, train_loader)
+    # TODO: checkpoint
+    # TODO: pre-trained
+    # TODO: restore
+    trainer = pl.Trainer(
+		gpus=[0], 
+		precision=16, 
+		limit_train_batches=0.5,
+		callbacks=[
+            RichProgressBar(),
+            EarlyStopping(monitor="val_loss", mode="min", patience=args.patience),
+
+        ]
+	)
+    trainer.fit(
+        model=model, 
+        train_dataloaders=train_loader, 
+        val_dataloaders=valid_loader
+    )
 
 if __name__ == '__main__':
     main()
