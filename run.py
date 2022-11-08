@@ -16,23 +16,47 @@ from torch import optim
 import numpy as np
 from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import MLFlowLogger
+from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
+import mlflow.pytorch
 
 from model import Trainer
 from batch_gen import BatchGenerator, VAS_Dataset, read_data
 from model import MS_TCN2
 
 
+def mstcn_loss(batch_target, predictions, mask):
+	cls_loss = 0
+	smooth_loss = 0
+	_lambda = 1 # classification loss weight
+	_tau = 0.15 # smooth loss weight
+	num_classes = predictions.shape[2]
+	# TODO: why clamp to 0 16?
+	for p in predictions:
+		cls_loss += nn.CrossEntropyLoss(ignore_index=-100)(
+			p.transpose(2, 1).contiguous().view(-1, num_classes), batch_target.view(-1))
+
+		temp_smooth_loss = nn.MSELoss(reduction='none')(F.log_softmax(p[:, :, 1:], dim=1), F.log_softmax(p.detach()[:, :, :-1], dim=1))
+		smooth_loss += torch.mean(
+			torch.clamp(
+				temp_smooth_loss, min=0, max=16
+			)*mask[:, :, 1:]
+		)
+	loss = _lambda*cls_loss + _tau*smooth_loss
+	return loss
+
+
 def align_video_length(batch):
-    print(batch)
     seq_length_list = [sample['seq_length'] for sample in batch]
     N = len(batch) # batch_size
     C = batch[0]['input'].shape[0] # feature size
     L = max(seq_length_list) # sequence length
     K = batch[0]['mask'].shape[0] # number of class
 
-    batch_input = torch.zeros([N, C, L])
-    batch_target = -100 * torch.ones([N, L])
-    batch_mask = torch.zeros([N, K, L])
+    batch_input = torch.zeros([N, C, L], dtype=torch.float)
+    batch_target = -100 * torch.ones([N, L], dtype=torch.long)
+    batch_mask = torch.zeros([N, K, L], dtype=torch.float)
     for idx, sample in enumerate(batch):
         sample_length = seq_length_list[idx]
         batch_input[idx, :, :sample_length] = torch.from_numpy(np.array(sample['input'], np.float32))
@@ -42,34 +66,49 @@ def align_video_length(batch):
     return batch_input, batch_target, batch_mask
 
 
-    
-# XXX: valid dataset
-# XXX: inference?
-# XXX: loss
 class PlModel(pl.LightningModule): 
-	def __init__(self, model, optimizer, lr, loss_func):
+	def __init__(self, model, optimizer, lr, lr_scheduler, lr_scheduler_config, loss_func, num_classes):
 		super().__init__()
 		self.model = model
 		self.optimizer = optimizer
 		self.lr = lr
+		self.lr_scheduler = lr_scheduler
+		self.lr_scheduler_config = lr_scheduler_config
 		self.loss_func = loss_func
+		self.num_classes = num_classes
 		
 	def configure_optimizers(self):
-		return self.optimizer(self.parameters(), lr=self.lr)
+		optimizer = self.optimizer(self.parameters(), lr=self.lr)
+		lr_scheduler = self.lr_scheduler(optimizer, **self.lr_scheduler_config)
+		return [optimizer], [lr_scheduler]
 		
 	def training_step(self, train_batch, batch_idx):
 		input, target, mask = train_batch
-		input = input.view(input.size(0), -1)
+		# input = input.view(input.size(0), -1)
 		pred = self.model(input)
-		loss = self.loss_func(target, pred)
+		loss = self.loss_func(target, pred, mask)
+		
+		# epoch_loss += loss.item()
+
+		# _, predicted = torch.max(pred[-1].data, 1)
+		# correct += ((predicted == target).float()*mask[:, 0, :].squeeze(1)).sum().item()
+		# total += torch.sum(mask[:, 0, :]).item()
+
+
+
+		# batch_gen.reset()
+		# torch.save(self.model.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".model")
+		# torch.save(optimizer.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".opt")
+		# logger.info("[epoch %d]: epoch loss = %f,   acc = %f" % (epoch + 1, epoch_loss / len(batch_gen.list_of_examples),
+		# 													float(correct)/total))
 		self.log('train_loss', loss)
 		return loss
 		
 	def validation_step(self, val_batch, batch_idx):
 		input, target, mask = val_batch
-		input = input.view(input.size(0), -1)
+		# input = input.view(input.size(0), -1)
 		pred = self.model(input)
-		loss = self.loss_func(target, pred)
+		loss = self.loss_func(target, pred, mask)
 		self.log('val_loss', loss)
 
 
@@ -83,18 +122,19 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', default='train')
-    parser.add_argument('--dataset', default="breakfast")
+    parser.add_argument('--dataset', default="gtea")
     parser.add_argument('--split', default='1')
 
     parser.add_argument('--features_dim', default='2048', type=int)
-    parser.add_argument('--bz', default='4', type=int)
+    parser.add_argument('--bz', default=4, type=int)
+    parser.add_argument('--num_workers', default=2, type=int)
     parser.add_argument('--lr', default='0.0005', type=float)
 
 
     parser.add_argument('--num_f_maps', default='64', type=int)
 
     # Need input
-    parser.add_argument('--num_epochs', type=int, default=30)
+    parser.add_argument('--num_epochs', type=int, default=300)
     parser.add_argument('--num_layers_PG', type=int, default=11)
     parser.add_argument('--num_layers_R', type=int, default=10)
     parser.add_argument('--num_R', type=int, default=3)
@@ -107,6 +147,7 @@ def main():
     features_dim = args.features_dim
     bz = args.bz
     lr = args.lr
+    num_workers = args.num_workers
 
     num_layers_PG = args.num_layers_PG
     num_layers_R = args.num_layers_R
@@ -155,32 +196,17 @@ def main():
     #     trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
 
 
-    # # data
-    # dataset = MNIST('', train=True, download=True, transform=transforms.ToTensor())
-    # mnist_train, mnist_val = random_split(dataset, [55000, 5000])
-
-    # train_loader = DataLoader(mnist_train, batch_size=32)
-    # val_loader = DataLoader(mnist_val, batch_size=32)
-
-
-    # XXX: valid dataset
-    list_of_samples = read_data(vid_list_file)
+    # data
+    train_samples = read_data(vid_list_file)
     dataset = VAS_Dataset(
-        num_classes, actions_dict, gt_path, features_path, sample_rate, list_of_samples)
-    train_loader = DataLoader(dataset=dataset, collate_fn=align_video_length, batch_size=bz)
+        num_classes, actions_dict, gt_path, features_path, sample_rate, train_samples)
+    train_loader = DataLoader(dataset=dataset, collate_fn=align_video_length, batch_size=bz, num_workers=num_workers)
 
+    valid_samples = read_data(vid_list_file_tst)
     valid_dataset = VAS_Dataset(
-        num_classes, actions_dict, gt_path, features_path, sample_rate, list_of_samples)
-    valid_loader = DataLoader(dataset=valid_dataset, collate_fn=align_video_length, batch_size=bz)
+        num_classes, actions_dict, gt_path, features_path, sample_rate, valid_samples)
+    valid_loader = DataLoader(dataset=valid_dataset, collate_fn=align_video_length, batch_size=bz, num_workers=num_workers)
 
-
-    # # data
-    # train_data = VAS_Dataset(num_classes, actions_dict, gt_path, features_path, sample_rate, vid_list_file)
-    # # valid_data = VAS_Dataset(num_classes, actions_dict, gt_path, features_path, sample_rate, vid_list_file)
-
-    # batch_sampler = SequenceAlignSampler(batch_size=bz)
-    # train_loader = DataLoader(train_data, batch_sampler=batch_sampler)
-    # # val_loader = DataLoader(train_data, batch_sampler=batch_sampler)
 
 	# model
     model = MS_TCN2(
@@ -189,23 +215,46 @@ def main():
     )
     # XXX: model generating factory
     optimizer = optim.Adam
-    model = PlModel(model, optimizer, lr)
+    lr_scheduler = optim.lr_scheduler.StepLR
+    lr_scheduler_config = {
+		'gamma': 0.8,
+    	'step_size': 50
+	}
 
+    model = PlModel(
+		model=model,
+		optimizer=optimizer,
+		lr=lr,
+		lr_scheduler=lr_scheduler,
+		lr_scheduler_config=lr_scheduler_config,
+		loss_func=mstcn_loss,
+		num_classes=num_classes
+	)
     
     # training
     # XXX: pl.Trainer arguments
     # TODO: checkpoint
     # TODO: pre-trained
     # TODO: restore
+	# TODO: predict
+	
+    mlf_logger = MLFlowLogger(experiment_name="lightning_logs", tracking_uri="file:./ml-runs")
+    mlflow.pytorch.autolog()
     trainer = pl.Trainer(
 		gpus=[0], 
-		precision=16, 
-		limit_train_batches=0.5,
+		precision=32,
 		callbacks=[
-            RichProgressBar(),
+            RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
             EarlyStopping(monitor="val_loss", mode="min", patience=args.patience),
-
-        ]
+			ModelCheckpoint(
+				dirpath="my/path/", 
+				filename='{epoch}-{val_loss:.2f}', 
+				save_top_k=1, 
+				monitor="val_loss"
+			),
+        ],
+		max_epochs=num_epochs,
+		logger=mlf_logger,
 	)
     trainer.fit(
         model=model, 
