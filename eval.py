@@ -4,7 +4,7 @@
 import numpy as np
 import argparse
 
-from utils import VisActionSeg
+from utils import VisActionSeg, get_labels_start_end_time
 
 
 def read_file(path):
@@ -12,27 +12,6 @@ def read_file(path):
         content = f.read()
         f.close()
     return content
-
-
-def get_labels_start_end_time(frame_wise_labels, bg_class=["background"]):
-    labels = []
-    starts = []
-    ends = []
-    last_label = frame_wise_labels[0]
-    if frame_wise_labels[0] not in bg_class:
-        labels.append(frame_wise_labels[0])
-        starts.append(0)
-    for i in range(len(frame_wise_labels)):
-        if frame_wise_labels[i] != last_label:
-            if frame_wise_labels[i] not in bg_class:
-                labels.append(frame_wise_labels[i])
-                starts.append(i)
-            if last_label not in bg_class:
-                ends.append(i)
-            last_label = frame_wise_labels[i]
-    if last_label not in bg_class:
-        ends.append(i)
-    return labels, starts, ends
 
 
 def levenstein(p, y, norm=False):
@@ -95,7 +74,7 @@ def f_score(recognized, ground_truth, overlap, bg_class=["background"]):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--dataset', default="breakfast")
+    parser.add_argument('--dataset', default="gtea")
     parser.add_argument('--split', default='1')
 
     args = parser.parse_args()
@@ -112,6 +91,7 @@ def main():
     correct = 0
     total = 0
     edit = 0
+    total_edit = 0
     vis = VisActionSeg(None)
 
     for vid in list_of_videos:
@@ -121,31 +101,36 @@ def main():
         recog_file = recog_path + vid.split('.')[0]
         recog_content = read_file(recog_file).split('\n')[1].split()
 
-        # TODOS: F1 score func can't get correct result while sequence has 
-        # last single action
-        # recog_content = ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'b']
-        # gt_content = ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'b']
-
-        # vis.single_vis(gt_content)
-        # vis.single_vis(recog_content)
-
         for i in range(len(gt_content)):
             total += 1
             if gt_content[i] == recog_content[i]:
                 correct += 1
 
-        edit += edit_score(recog_content, gt_content)
+        edit = edit_score(recog_content, gt_content)
+        total_edit += edit
 
+        ff = []
         for s in range(len(overlap)):
             tp1, fp1, fn1 = f_score(recog_content, gt_content, overlap[s])
             tp[s] += tp1
             fp[s] += fp1
             fn[s] += fn1
 
+            precision = tp1 / float(tp1+fp1)
+            recall = tp1 / float(tp1+fn1)
+            if precision == 0 and recall == 0:
+                f1 = 0
+            else:
+                f1 = 2.0 * (precision*recall) / (precision+recall)
+            ff.append(f1)
+        # print(
+        #     f'vid {vid} F1@[50, 25, 10] {ff[2]:.2f} {ff[1]:.2f} {ff[0]:.2f} Edit {edit}')
+        vis.single_vis(gt_content, recog_content)
+
     print("Acc: %.4f" % (100*float(correct)/total))
-    print('Edit: %.4f' % ((1.0*edit)/len(list_of_videos)))
+    print('Edit: %.4f' % ((1.0*total_edit)/len(list_of_videos)))
     acc = (100*float(correct)/total)
-    edit = ((1.0*edit)/len(list_of_videos))
+    total_edit = ((1.0*total_edit)/len(list_of_videos))
     for s in range(len(overlap)):
         precision = tp[s] / float(tp[s]+fp[s])
         recall = tp[s] / float(tp[s]+fn[s])

@@ -22,96 +22,13 @@ from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTh
 import mlflow.pytorch
 
 from model import Trainer
-from batch_gen import BatchGenerator, VAS_Dataset, read_data
+from batch_gen import BatchGenerator, VAS_Dataset, read_data, get_vas_dataloader, get_train_dataloader
 from model import MS_TCN2
+from utils import mstcn_loss
+from pl_model import PlModel
 
 
-def mstcn_loss(batch_target, predictions, mask):
-	cls_loss = 0
-	smooth_loss = 0
-	_lambda = 1 # classification loss weight
-	_tau = 0.15 # smooth loss weight
-	num_classes = predictions.shape[2]
-	# TODO: why clamp to 0 16?
-	for p in predictions:
-		cls_loss += nn.CrossEntropyLoss(ignore_index=-100)(
-			p.transpose(2, 1).contiguous().view(-1, num_classes), batch_target.view(-1))
-
-		temp_smooth_loss = nn.MSELoss(reduction='none')(F.log_softmax(p[:, :, 1:], dim=1), F.log_softmax(p.detach()[:, :, :-1], dim=1))
-		smooth_loss += torch.mean(
-			torch.clamp(
-				temp_smooth_loss, min=0, max=16
-			)*mask[:, :, 1:]
-		)
-	loss = _lambda*cls_loss + _tau*smooth_loss
-	return loss
-
-
-def align_video_length(batch):
-    seq_length_list = [sample['seq_length'] for sample in batch]
-    N = len(batch) # batch_size
-    C = batch[0]['input'].shape[0] # feature size
-    L = max(seq_length_list) # sequence length
-    K = batch[0]['mask'].shape[0] # number of class
-
-    batch_input = torch.zeros([N, C, L], dtype=torch.float)
-    batch_target = -100 * torch.ones([N, L], dtype=torch.long)
-    batch_mask = torch.zeros([N, K, L], dtype=torch.float)
-    for idx, sample in enumerate(batch):
-        sample_length = seq_length_list[idx]
-        batch_input[idx, :, :sample_length] = torch.from_numpy(np.array(sample['input'], np.float32))
-        batch_target[idx, :sample_length] = torch.from_numpy(np.array(sample['target'], np.int64))
-        batch_mask[idx, :, :sample_length] = torch.from_numpy(np.array(sample['mask'], np.float32))
-    
-    return batch_input, batch_target, batch_mask
-
-
-class PlModel(pl.LightningModule): 
-	def __init__(self, model, optimizer, lr, lr_scheduler, lr_scheduler_config, loss_func, num_classes):
-		super().__init__()
-		self.model = model
-		self.optimizer = optimizer
-		self.lr = lr
-		self.lr_scheduler = lr_scheduler
-		self.lr_scheduler_config = lr_scheduler_config
-		self.loss_func = loss_func
-		self.num_classes = num_classes
-		
-	def configure_optimizers(self):
-		optimizer = self.optimizer(self.parameters(), lr=self.lr)
-		lr_scheduler = self.lr_scheduler(optimizer, **self.lr_scheduler_config)
-		return [optimizer], [lr_scheduler]
-		
-	def training_step(self, train_batch, batch_idx):
-		input, target, mask = train_batch
-		# input = input.view(input.size(0), -1)
-		pred = self.model(input)
-		loss = self.loss_func(target, pred, mask)
-		
-		# epoch_loss += loss.item()
-
-		# _, predicted = torch.max(pred[-1].data, 1)
-		# correct += ((predicted == target).float()*mask[:, 0, :].squeeze(1)).sum().item()
-		# total += torch.sum(mask[:, 0, :]).item()
-
-
-
-		# batch_gen.reset()
-		# torch.save(self.model.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".model")
-		# torch.save(optimizer.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".opt")
-		# logger.info("[epoch %d]: epoch loss = %f,   acc = %f" % (epoch + 1, epoch_loss / len(batch_gen.list_of_examples),
-		# 													float(correct)/total))
-		self.log('train_loss', loss)
-		return loss
-		
-	def validation_step(self, val_batch, batch_idx):
-		input, target, mask = val_batch
-		# input = input.view(input.size(0), -1)
-		pred = self.model(input)
-		loss = self.loss_func(target, pred, mask)
-		self.log('val_loss', loss)
-
-
+# TODO: Docstring for this repo.
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 1538574472
@@ -124,11 +41,12 @@ def main():
     parser.add_argument('--action', default='train')
     parser.add_argument('--dataset', default="gtea")
     parser.add_argument('--split', default='1')
+    parser.add_argument('--checkpoint', default='my/path/epoch=35-val_loss=5.74.ckpt')
 
     parser.add_argument('--features_dim', default='2048', type=int)
     parser.add_argument('--bz', default=4, type=int)
     parser.add_argument('--num_workers', default=2, type=int)
-    parser.add_argument('--lr', default='0.0005', type=float)
+    parser.add_argument('--lr', default='0.0001', type=float)
 
 
     parser.add_argument('--num_f_maps', default='64', type=int)
@@ -137,7 +55,7 @@ def main():
     parser.add_argument('--num_epochs', type=int, default=300)
     parser.add_argument('--num_layers_PG', type=int, default=11)
     parser.add_argument('--num_layers_R', type=int, default=10)
-    parser.add_argument('--num_R', type=int, default=3)
+    parser.add_argument('--num_R', type=int, default=4)
 
     parser.add_argument('--patience', type=int, default=20)
 
@@ -186,29 +104,32 @@ def main():
     num_classes = len(actions_dict)
 
     patience = args.patience
-    # trainer = Trainer(num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, num_classes, args.dataset, args.split)
-    # if args.action == "train":
-    #     batch_gen = BatchGenerator(num_classes, actions_dict, gt_path, features_path, sample_rate)
-    #     batch_gen.read_data(vid_list_file)
-    #     trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr, device=device)
-
-    # if args.action == "predict":
-    #     trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
-
 
     # data
-    train_samples = read_data(vid_list_file)
-    dataset = VAS_Dataset(
-        num_classes, actions_dict, gt_path, features_path, sample_rate, train_samples)
-    train_loader = DataLoader(dataset=dataset, collate_fn=align_video_length, batch_size=bz, num_workers=num_workers)
+    # files = read_data(vid_list_file)
+    # train_loader, valid_loader = get_train_dataloader(
+    #     files=files,
+    #     num_classes=num_classes,
+    #     actions_dict=actions_dict,
+    #     gt_path=gt_path,
+    #     features_path=features_path,
+    #     sample_rate=sample_rate,
+    #     batch_size=bz,
+    #     num_workers=num_workers,
+    #     seed=seed
+    # )
+    train_files = read_data(vid_list_file)
+    train_loader = get_vas_dataloader(
+        train_files, num_classes, actions_dict, gt_path, features_path, 
+        sample_rate, bz, num_workers
+    )
+    test_files = read_data(vid_list_file_tst)
+    valid_loader = get_vas_dataloader(
+        test_files, num_classes, actions_dict, gt_path, features_path, 
+        sample_rate, 1, num_workers
+    )
 
-    valid_samples = read_data(vid_list_file_tst)
-    valid_dataset = VAS_Dataset(
-        num_classes, actions_dict, gt_path, features_path, sample_rate, valid_samples)
-    valid_loader = DataLoader(dataset=valid_dataset, collate_fn=align_video_length, batch_size=bz, num_workers=num_workers)
-
-
-	# model
+    # model
     model = MS_TCN2(
         num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, 
         num_classes
@@ -217,50 +138,83 @@ def main():
     optimizer = optim.Adam
     lr_scheduler = optim.lr_scheduler.StepLR
     lr_scheduler_config = {
-		'gamma': 0.8,
-    	'step_size': 50
-	}
+        'gamma': 0.8,
+        'step_size': 10
+    }
 
     model = PlModel(
-		model=model,
-		optimizer=optimizer,
-		lr=lr,
-		lr_scheduler=lr_scheduler,
-		lr_scheduler_config=lr_scheduler_config,
-		loss_func=mstcn_loss,
-		num_classes=num_classes
-	)
+        model=model,
+        optimizer=optimizer,
+        lr=lr,
+        lr_scheduler=lr_scheduler,
+        lr_scheduler_config=lr_scheduler_config,
+        loss_func=mstcn_loss,
+        num_classes=num_classes,
+        action_dict=actions_dict,
+        sample_rate=sample_rate,
+        results_dir=results_dir,
+        
+    )
     
     # training
     # XXX: pl.Trainer arguments
     # TODO: checkpoint
     # TODO: pre-trained
     # TODO: restore
-	# TODO: predict
-	
+    # TODO: predict
+    
     mlf_logger = MLFlowLogger(experiment_name="lightning_logs", tracking_uri="file:./ml-runs")
     mlflow.pytorch.autolog()
-    trainer = pl.Trainer(
-		gpus=[0], 
-		precision=32,
-		callbacks=[
-            RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
-            EarlyStopping(monitor="val_loss", mode="min", patience=args.patience),
-			ModelCheckpoint(
-				dirpath="my/path/", 
-				filename='{epoch}-{val_loss:.2f}', 
-				save_top_k=1, 
-				monitor="val_loss"
-			),
-        ],
-		max_epochs=num_epochs,
-		logger=mlf_logger,
-	)
-    trainer.fit(
-        model=model, 
-        train_dataloaders=train_loader, 
-        val_dataloaders=valid_loader
-    )
+    
 
+    if args.action == 'train':
+        trainer = pl.Trainer(
+            gpus=[0], 
+            precision=32,
+            callbacks=[
+                RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
+                EarlyStopping(monitor="val_loss", mode="min", patience=patience),
+                ModelCheckpoint(
+                    dirpath="my/path/", 
+                    filename='{epoch}-{val_loss:.2f}', 
+                    save_top_k=1, 
+                    monitor="val_loss"
+                ),
+            ],
+            max_epochs=num_epochs,
+            logger=mlf_logger,
+        )
+
+        trainer.fit(
+            model=model, 
+            train_dataloaders=train_loader, 
+            val_dataloaders=valid_loader
+        )
+    elif args.action == 'predict':
+        # pred
+        trainer = pl.Trainer(
+            gpus=[0], 
+            precision=32,
+            callbacks=[
+                RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
+            ],
+            logger=mlf_logger,
+        )
+
+        files = read_data(vid_list_file_tst)
+        test_loader = get_vas_dataloader(
+            files, num_classes, actions_dict, gt_path, features_path, 
+            sample_rate, 1, num_workers
+        )
+        model = PlModel.load_from_checkpoint(args.checkpoint)
+        model.eval()
+        trainer.predict(
+            model=model,
+            dataloaders=test_loader
+        )
+    
+
+    
 if __name__ == '__main__':
     main()
+    
