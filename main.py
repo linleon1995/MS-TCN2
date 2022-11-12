@@ -18,7 +18,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', default='predict')
-    parser.add_argument('--dataset', default="50salads")
+    parser.add_argument('--dataset', default="gtea")
     parser.add_argument('--split', default='1')
 
     parser.add_argument('--features_dim', default='2048', type=int)
@@ -32,7 +32,7 @@ def main():
     parser.add_argument('--num_epochs', type=int, default=75)
     parser.add_argument('--num_layers_PG', type=int, default=11)
     parser.add_argument('--num_layers_R', type=int, default=10)
-    parser.add_argument('--num_R', type=int, default=3)
+    parser.add_argument('--num_R', type=int, default=4)
 
     args = parser.parse_args()
 

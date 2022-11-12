@@ -38,10 +38,10 @@ def main():
     torch.backends.cudnn.deterministic = True
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', default='train')
+    parser.add_argument('--action', default='predict')
     parser.add_argument('--dataset', default="gtea")
     parser.add_argument('--split', default='1')
-    parser.add_argument('--checkpoint', default='my/path/epoch=35-val_loss=5.74.ckpt')
+    parser.add_argument('--checkpoint', default='my/path/epoch=83-val_loss=5.30.ckpt')
 
     parser.add_argument('--features_dim', default='2048', type=int)
     parser.add_argument('--bz', default=4, type=int)
@@ -169,7 +169,8 @@ def main():
 
     if args.action == 'train':
         trainer = pl.Trainer(
-            gpus=[0], 
+            accelerator='gpu', 
+            devices=[0], 
             precision=32,
             callbacks=[
                 RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
@@ -193,7 +194,8 @@ def main():
     elif args.action == 'predict':
         # pred
         trainer = pl.Trainer(
-            gpus=[0], 
+            accelerator='gpu', 
+            devices=[0], 
             precision=32,
             callbacks=[
                 RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),

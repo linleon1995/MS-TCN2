@@ -1,5 +1,6 @@
 # XXX: temp
 import os
+from datetime import datetime
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import matplotlib.pyplot as plt
@@ -7,7 +8,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
-
+import cv2
 # from eval import get_labels_start_end_time
 
 
@@ -181,19 +182,59 @@ def vis_action_seg(actions):
     # Assign colors
 
 
-if __name__ == '__main__':
-    category_names = ['Strongly disagree', 'Disagree', 'Disagree',
-                    'Neither agree nor disagree', 'Agree', 'Strongly agree', 'Agree']
-    results = {
-        'Prediction': [10, 15, 17, 32, 26, 15, 17],
-        'Correct': [26, 22, 29, 10, 13, 15, 17],
-        'Question 3': [35, 37, 7, 2, 19, 15, 17],
-        'Question 4': [32, 11, 9, 15, 33, 15, 17],
-        'Question 5': [21, 29, 5, 5, 40, 15, 17],
-        'Question 6': [8, 19, 5, 30, 38, 15, 17]
-    }
-    all_category = ['Strongly disagree', 'Disagree',
-                    'Neither agree nor disagree', 'Agree', 'Strongly agree']
 
-    survey(results, category_names, all_category)
-    plt.show()
+def video_vis():
+    # Create a VideoCapture object and read from input file
+    f = r'C:\Users\test\Desktop\Leon\Datasets\Breakfast\BreakfastII_15fps_qvga_sync\P03\cam01\P03_cereals.avi'
+    cap = cv2.VideoCapture(f)
+    
+    # Check if camera opened successfully
+    if (cap.isOpened()== False):
+        print("Error opening video file")
+    
+    # Read until video is completed
+    while(cap.isOpened()):
+        
+        # Capture frame-by-frame
+        ret, frame = cap.read()
+        if ret == True:
+            # Display the resulting frame
+            cv2.rectangle(frame, (100, 150), (500, 600),
+                          (0, 255, 0), -1)
+            cv2.imshow('Frame', frame)
+            
+            # Press Q on keyboard to exit
+            if cv2.waitKey(25) & 0xFF == ord('q'):
+                break
+    
+        # Break the loop
+        else:
+            break
+    
+    # When everything done, release
+    # the video capture object
+    cap.release()
+    
+    # Closes all the frames
+    cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    # category_names = ['Strongly disagree', 'Disagree', 'Disagree',
+    #                 'Neither agree nor disagree', 'Agree', 'Strongly agree', 'Agree']
+    # results = {
+    #     'Prediction': [10, 15, 17, 32, 26, 15, 17],
+    #     'Correct': [26, 22, 29, 10, 13, 15, 17],
+    #     'Question 3': [35, 37, 7, 2, 19, 15, 17],
+    #     'Question 4': [32, 11, 9, 15, 33, 15, 17],
+    #     'Question 5': [21, 29, 5, 5, 40, 15, 17],
+    #     'Question 6': [8, 19, 5, 30, 38, 15, 17]
+    # }
+    # all_category = ['Strongly disagree', 'Disagree',
+    #                 'Neither agree nor disagree', 'Agree', 'Strongly agree']
+
+    # survey(results, category_names, all_category)
+    # plt.show()
+
+
+    video_vis()

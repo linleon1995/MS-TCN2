@@ -101,10 +101,14 @@ def main():
         recog_file = recog_path + vid.split('.')[0]
         recog_content = read_file(recog_file).split('\n')[1].split()
 
+        sample_total, sample_correct = 0, 0
         for i in range(len(gt_content)):
-            total += 1
+            sample_total += 1
             if gt_content[i] == recog_content[i]:
-                correct += 1
+                sample_correct += 1
+
+        total += sample_total
+        correct += sample_correct
 
         edit = edit_score(recog_content, gt_content)
         total_edit += edit
@@ -123,9 +127,11 @@ def main():
             else:
                 f1 = 2.0 * (precision*recall) / (precision+recall)
             ff.append(f1)
-        # print(
-        #     f'vid {vid} F1@[50, 25, 10] {ff[2]:.2f} {ff[1]:.2f} {ff[0]:.2f} Edit {edit}')
-        vis.single_vis(gt_content, recog_content)
+
+        acc = (100*float(sample_correct)/sample_total)
+        print(
+            f'vid {vid} F1@[50, 25, 10] {ff[2]:.2f} {ff[1]:.2f} {ff[0]:.2f} Acc {acc} Edit {edit}')
+        # vis.single_vis(gt_content, recog_content)
 
     print("Acc: %.4f" % (100*float(correct)/total))
     print('Edit: %.4f' % ((1.0*total_edit)/len(list_of_videos)))
