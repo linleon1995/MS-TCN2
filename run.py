@@ -2,7 +2,6 @@ import os
 import argparse
 from pickletools import optimize
 import random
-from h11 import Data
 
 import torch
 from torch import nn
