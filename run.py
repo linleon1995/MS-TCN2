@@ -2,6 +2,7 @@ import os
 import argparse
 from pickletools import optimize
 import random
+from pathlib import Path
 
 import torch
 from torch import nn
@@ -20,7 +21,7 @@ from pytorch_lightning.loggers import MLFlowLogger
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 import mlflow.pytorch
 
-from model import Trainer
+# from model import Trainer
 from batch_gen import BatchGenerator, VAS_Dataset, read_data, get_vas_dataloader, get_train_dataloader
 from model import MS_TCN2
 from utils import mstcn_loss
@@ -38,25 +39,25 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', default='predict')
-    parser.add_argument('--dataset', default="gtea")
-    parser.add_argument('--split', default='1')
-    parser.add_argument('--checkpoint', default='my/path/epoch=83-val_loss=5.30.ckpt')
+    parser.add_argument('--dataset', default="coffee_room")
+    parser.add_argument('--split', default='4')
+    parser.add_argument(
+        '--checkpoint', default='my/path/epoch=40-val_loss=1.60.ckpt')
 
     parser.add_argument('--features_dim', default='2048', type=int)
     parser.add_argument('--bz', default=4, type=int)
     parser.add_argument('--num_workers', default=2, type=int)
-    parser.add_argument('--lr', default='0.0001', type=float)
-
+    parser.add_argument('--lr', default='0.0005', type=float)
 
     parser.add_argument('--num_f_maps', default='64', type=int)
 
     # Need input
-    parser.add_argument('--num_epochs', type=int, default=300)
+    parser.add_argument('--num_epochs', type=int, default=150)
     parser.add_argument('--num_layers_PG', type=int, default=11)
     parser.add_argument('--num_layers_R', type=int, default=10)
     parser.add_argument('--num_R', type=int, default=4)
 
-    parser.add_argument('--patience', type=int, default=20)
+    parser.add_argument('--patience', type=int, default=40)
 
     args = parser.parse_args()
 
@@ -78,9 +79,12 @@ def main():
     if args.dataset == "50salads":
         sample_rate = 2
 
-    vid_list_file = "./data/"+args.dataset+"/splits/train.split"+args.split+".bundle"
-    vid_list_file_tst = "./data/"+args.dataset+"/splits/test.split"+args.split+".bundle"
-    features_path = "./data/"+args.dataset+"/features/"
+    vid_list_file = "./data/"+args.dataset + \
+        "/splits/train.split"+args.split+".bundle"
+    vid_list_file_tst = "./data/"+args.dataset + \
+        "/splits/test.split"+args.split+".bundle"
+    features_path = r"C:\Users\test\Desktop\Leon\Datasets\coffee_room\events_door_feature\x3d_m/"
+    # features_path = "./data/"+args.dataset+"/features/"
     gt_path = "./data/"+args.dataset+"/groundTruth/"
 
     mapping_file = "./data/"+args.dataset+"/mapping.txt"
@@ -117,22 +121,33 @@ def main():
     #     num_workers=num_workers,
     #     seed=seed
     # )
+
     train_files = read_data(vid_list_file)
     train_loader = get_vas_dataloader(
-        train_files, num_classes, actions_dict, gt_path, features_path, 
+        train_files, num_classes, actions_dict, gt_path, features_path,
         sample_rate, bz, num_workers
     )
     test_files = read_data(vid_list_file_tst)
     valid_loader = get_vas_dataloader(
-        test_files, num_classes, actions_dict, gt_path, features_path, 
+        test_files, num_classes, actions_dict, gt_path, features_path,
         sample_rate, 1, num_workers
     )
 
+    # TODO: to find the not exist feature, reuse this code piece
+    # from pathlib import Path
+    # fs = list(Path(features_path).rglob('*.npy'))
+    # fs_names = [f.stem for f in fs]
+    # for t in train_files:
+    #     t = Path(t)
+    #     if t.stem not in fs_names:
+    #         print(t.stem)
+
     # model
-    model = MS_TCN2(
-        num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, 
+    vas_model = MS_TCN2(
+        num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim,
         num_classes
     )
+
     # XXX: model generating factory
     optimizer = optim.Adam
     lr_scheduler = optim.lr_scheduler.StepLR
@@ -142,7 +157,7 @@ def main():
     }
 
     model = PlModel(
-        model=model,
+        model=vas_model,
         optimizer=optimizer,
         lr=lr,
         lr_scheduler=lr_scheduler,
@@ -152,33 +167,36 @@ def main():
         action_dict=actions_dict,
         sample_rate=sample_rate,
         results_dir=results_dir,
-        
     )
-    
+    # print(inspect.getmro(model))
+
     # training
     # XXX: pl.Trainer arguments
     # TODO: checkpoint
     # TODO: pre-trained
     # TODO: restore
     # TODO: predict
-    
-    mlf_logger = MLFlowLogger(experiment_name="lightning_logs", tracking_uri="file:./ml-runs")
+
+    mlf_logger = MLFlowLogger(
+        experiment_name="lightning_logs", tracking_uri="file:./ml-runs")
     mlflow.pytorch.autolog()
-    
 
     if args.action == 'train':
         trainer = pl.Trainer(
-            accelerator='gpu', 
-            devices=[0], 
+            accelerator='gpu',
+            devices=[0],
             precision=32,
             callbacks=[
-                RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
-                EarlyStopping(monitor="val_loss", mode="min", patience=patience),
+                RichProgressBar(theme=RichProgressBarTheme(
+                    progress_bar="green")),
+                EarlyStopping(monitor="val_loss",
+                              mode="min", patience=patience),
                 ModelCheckpoint(
-                    dirpath="my/path/", 
-                    filename='{epoch}-{val_loss:.2f}', 
-                    save_top_k=1, 
-                    monitor="val_loss"
+                    dirpath="my/path/",
+                    filename='{epoch}-{val_loss:.2f}',
+                    save_top_k=1,
+                    monitor="val_loss",
+                    save_weights_only=True,
                 ),
             ],
             max_epochs=num_epochs,
@@ -186,25 +204,26 @@ def main():
         )
 
         trainer.fit(
-            model=model, 
-            train_dataloaders=train_loader, 
+            model=model,
+            train_dataloaders=train_loader,
             val_dataloaders=valid_loader
         )
     elif args.action == 'predict':
         # pred
         trainer = pl.Trainer(
-            accelerator='gpu', 
-            devices=[0], 
+            accelerator='gpu',
+            devices=[0],
             precision=32,
             callbacks=[
-                RichProgressBar(theme=RichProgressBarTheme(progress_bar="green")),
+                RichProgressBar(theme=RichProgressBarTheme(
+                    progress_bar="green")),
             ],
             logger=mlf_logger,
         )
 
         files = read_data(vid_list_file_tst)
         test_loader = get_vas_dataloader(
-            files, num_classes, actions_dict, gt_path, features_path, 
+            files, num_classes, actions_dict, gt_path, features_path,
             sample_rate, 1, num_workers
         )
         model = PlModel.load_from_checkpoint(args.checkpoint)
@@ -213,9 +232,19 @@ def main():
             model=model,
             dataloaders=test_loader
         )
-    
 
-    
+
 if __name__ == '__main__':
-    main()
-    
+    # main()
+
+    # model_uri = './mlruns/0/778692b74cc2437b97f70fa0f80734f0/artifacts/model'
+    model_uri = r'C:\Users\test\Desktop\Leon\Projects\MS_TCN2\results_old\9b7114c27f9440c1b1d6f7836e8d18c0/artifacts/model'
+
+    pytorch_pyfunc = mlflow.pyfunc.load_model(model_uri=model_uri)
+
+    f = Path(r'C:\Users\test\Desktop\Leon\Datasets\coffee_room\events_door_feature\x3d_m\20221129080000_coffee_video_111995_112445.npy')
+    video_data = np.load(f)
+    video_data = np.expand_dims(video_data, 0)
+
+    pred = pytorch_pyfunc.predict(video_data)
+    pass

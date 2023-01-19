@@ -14,6 +14,13 @@ def read_file(path):
     return content
 
 
+def read_file_new(path):
+    with open(path, 'r') as fw:
+        contents = fw.readlines()
+    contents = [c[:-2] for c in contents if c.endswith('\n')]
+    return contents
+
+
 def levenstein(p, y, norm=False):
     m_row = len(p)
     n_col = len(y)
@@ -56,9 +63,11 @@ def f_score(recognized, ground_truth, overlap, bg_class=["background"]):
     hits = np.zeros(len(y_label))
 
     for j in range(len(p_label)):
-        intersection = np.minimum(p_end[j], y_end) - np.maximum(p_start[j], y_start)
+        intersection = np.minimum(
+            p_end[j], y_end) - np.maximum(p_start[j], y_start)
         union = np.maximum(p_end[j], y_end) - np.minimum(p_start[j], y_start)
-        IoU = (1.0*intersection / union)*([p_label[j] == y_label[x] for x in range(len(y_label))])
+        IoU = (1.0*intersection / union) * \
+            ([p_label[j] == y_label[x] for x in range(len(y_label))])
         # Get the best scoring segment
         idx = np.array(IoU).argmax()
 
@@ -96,12 +105,20 @@ def main():
 
     for vid in list_of_videos:
         gt_file = ground_truth_path + vid
-        gt_content = read_file(gt_file).split('\n')[0:-1]
+        # gt_content = read_file(gt_file).split('\n')[0:-1]
+        gt_content = read_file_new(gt_file)
 
-        recog_file = recog_path + vid.split('.')[0]
-        recog_content = read_file(recog_file).split('\n')[1].split()
+        recog_file = recog_path + vid
+        # recog_file = recog_path + vid.split('.')[0]
+        # recog_content = read_file(recog_file).split('\n')[1].split()
+        recog_content = read_file_new(recog_file)
 
         sample_total, sample_correct = 0, 0
+
+        print(vid, len(gt_content), len(recog_content))
+        if len(gt_content) != len(recog_content):
+            continue
+
         for i in range(len(gt_content)):
             sample_total += 1
             if gt_content[i] == recog_content[i]:
@@ -145,6 +162,7 @@ def main():
 
         f1 = np.nan_to_num(f1)*100
         print('F1@%0.2f: %.4f' % (overlap[s], f1))
+
 
 if __name__ == '__main__':
     main()

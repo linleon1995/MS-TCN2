@@ -25,7 +25,6 @@ def main():
     parser.add_argument('--bz', default='4', type=int)
     parser.add_argument('--lr', default='0.0005', type=float)
 
-
     parser.add_argument('--num_f_maps', default='64', type=int)
 
     # Need input
@@ -53,8 +52,10 @@ def main():
     if args.dataset == "50salads":
         sample_rate = 2
 
-    vid_list_file = "./data/"+args.dataset+"/splits/train.split"+args.split+".bundle"
-    vid_list_file_tst = "./data/"+args.dataset+"/splits/test.split"+args.split+".bundle"
+    vid_list_file = "./data/"+args.dataset + \
+        "/splits/train.split"+args.split+".bundle"
+    vid_list_file_tst = "./data/"+args.dataset + \
+        "/splits/test.split"+args.split+".bundle"
     features_path = "./data/"+args.dataset+"/features/"
     gt_path = "./data/"+args.dataset+"/groundTruth/"
 
@@ -75,16 +76,19 @@ def main():
     for a in actions:
         actions_dict[a.split()[1]] = int(a.split()[0])
 
-
     num_classes = len(actions_dict)
-    trainer = Trainer(num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, num_classes, args.dataset, args.split)
+    trainer = Trainer(num_layers_PG, num_layers_R, num_R, num_f_maps,
+                      features_dim, num_classes, args.dataset, args.split)
     if args.action == "train":
-        batch_gen = BatchGenerator(num_classes, actions_dict, gt_path, features_path, sample_rate)
+        batch_gen = BatchGenerator(
+            num_classes, actions_dict, gt_path, features_path, sample_rate)
         batch_gen.read_data(vid_list_file)
-        trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr, device=device)
+        trainer.train(model_dir, batch_gen, num_epochs=num_epochs,
+                      batch_size=bz, learning_rate=lr, device=device)
 
     if args.action == "predict":
-        trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
+        trainer.predict(model_dir, results_dir, features_path,
+                        vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
 
 
 if __name__ == '__main__':

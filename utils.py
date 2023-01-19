@@ -1,16 +1,31 @@
 # XXX: temp
+import cv2
+from torch.nn import functional as F
+from torch import nn
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
 import os
 from datetime import datetime
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-from torch import nn
-from torch.nn import functional as F
-import cv2
 # from eval import get_labels_start_end_time
 
+
+# def convert_id_to_actions(self, framewise_predictions, gt_org, actions_dict_inv):
+#     recog = []
+#     for i in range(framewise_predictions.shape[1]):
+#         recog.extend(
+#             [actions_dict_inv[framewise_predictions[:, i].item()]] * self.args.sample_rate)
+
+#     # adjust length of recog if there is a size mismatch with the ground truth
+#     if gt_org.shape[1] != len(recog):
+#         if gt_org.shape[1] < len(recog):
+#             recog = recog[:gt_org.shape[1]]
+#         elif gt_org.shape[1] > len(recog):
+#             recog = recog + recog[::-1]
+#             recog = recog[:gt_org.shape[1]]
+#     return recog
 
 
 def get_labels_start_end_time(frame_wise_labels, bg_class=["background"]):
@@ -35,27 +50,27 @@ def get_labels_start_end_time(frame_wise_labels, bg_class=["background"]):
 
 
 def mstcn_loss(batch_target, predictions, mask):
-	cls_loss = 0
-	smooth_loss = 0
-	_lambda = 1 # classification loss weight
-	_tau = 0.15 # smooth loss weight
-	num_classes = predictions.shape[2]
-	# TODO: why clamp to 0 16?
-	for p in predictions:
+    cls_loss = 0
+    smooth_loss = 0
+    _lambda = 1  # classification loss weight
+    _tau = 0.15  # smooth loss weight
+    num_classes = predictions.shape[2]
+    # TODO: why clamp to 0 16?
+    for p in predictions:
         # classification loss
-		cls_loss += nn.CrossEntropyLoss(ignore_index=-100)(
-			p.transpose(2, 1).contiguous().view(-1, num_classes), batch_target.view(-1))
+        cls_loss += nn.CrossEntropyLoss(ignore_index=-100)(
+            p.transpose(2, 1).contiguous().view(-1, num_classes), batch_target.view(-1))
 
-        # smooth loss
-		temp_smooth_loss = nn.MSELoss(reduction='none')(
+    # smooth loss
+        temp_smooth_loss = nn.MSELoss(reduction='none')(
             F.log_softmax(p[:, :, 1:], dim=1), F.log_softmax(p.detach()[:, :, :-1], dim=1))
-		smooth_loss += torch.mean(
-			torch.clamp(
-				temp_smooth_loss, min=0, max=16
-			)*mask[:, :, 1:]
-		)
-	loss = _lambda*cls_loss + _tau*smooth_loss
-	return loss
+        smooth_loss += torch.mean(
+            torch.clamp(
+                temp_smooth_loss, min=0, max=16
+            )*mask[:, :, 1:]
+        )
+    loss = _lambda*cls_loss + _tau*smooth_loss
+    return loss
 
 
 def survey(results, category_names, all_category):
@@ -91,7 +106,7 @@ def survey(results, category_names, all_category):
     for result_name, result in results.items():
         left = 0
         for width, label in zip(result['width'], result['label']):
-            color_idx = np.where(all_category==label)[0][0]
+            color_idx = np.where(all_category == label)[0][0]
             color = category_colors[color_idx]
             ax.barh(result_name, width, left=left, height=0.2,
                     label=label, color=color)
@@ -100,9 +115,10 @@ def survey(results, category_names, all_category):
     # TODO: legend
     def legend_without_duplicate_labels(ax):
         handles, labels = ax.get_legend_handles_labels()
-        unique = [(h, l) for i, (h, l) in enumerate(zip(handles, labels)) if l not in labels[:i]]
+        unique = [(h, l) for i, (h, l) in enumerate(
+            zip(handles, labels)) if l not in labels[:i]]
         ax.legend(*zip(*unique), loc='center right')
-        
+
     legend_without_duplicate_labels(ax)
     # ax.text(5, 0.5, f'Precision 0.9', color='black')
     # for i, colname in enumerate(category_names):
@@ -114,12 +130,11 @@ def survey(results, category_names, all_category):
     #             label=colname, color=color)
     #     xcenters = starts + widths / 2
 
-        # r, g, b, _ = color
-        # text_color = 'white' if r * g * b < 0.5 else 'darkgrey'
-        # for y, (x, c) in enumerate(zip(xcenters, widths)):
-        #     ax.text(x, y, str(int(c)), ha='center', va='center',
-        #             color=text_color)
-
+    # r, g, b, _ = color
+    # text_color = 'white' if r * g * b < 0.5 else 'darkgrey'
+    # for y, (x, c) in enumerate(zip(xcenters, widths)):
+    #     ax.text(x, y, str(int(c)), ha='center', va='center',
+    #             color=text_color)
 
     # category_names = list(np.unique(np.array(all_category)))
     # ax.legend(ncol=len(category_names), bbox_to_anchor=(0, 1),
@@ -150,10 +165,11 @@ class VisActionSeg():
         # seg_lens[0] = seg_lens[0] + 1
         # seg_acts = np.take(actions, switch_idxs)
 
-        
-        correct_labels, correct_starts, correct_ends = get_labels_start_end_time(correct_actions, bg_class=[])
+        correct_labels, correct_starts, correct_ends = get_labels_start_end_time(
+            correct_actions, bg_class=[])
         correct_widths = np.array(correct_ends) - np.array(correct_starts)
-        pred_labels, pred_starts, pred_ends = get_labels_start_end_time(pred_actions, bg_class=[])
+        pred_labels, pred_starts, pred_ends = get_labels_start_end_time(
+            pred_actions, bg_class=[])
         pred_widths = np.array(pred_ends) - np.array(pred_starts)
         results = {
             'Prediction': {'width': pred_widths.tolist(), 'label': pred_labels},
@@ -163,7 +179,7 @@ class VisActionSeg():
         # all_category = np.arange(min(labels), max(labels)+1)
         all_category = np.unique(labels)
         fig, ax = survey(results, labels, all_category)
-        
+
         # for idx, l in enumerate(seg_lens):
         #     if idx == 0:
         #         plt.barh(0, l, height=0.25)
@@ -176,25 +192,25 @@ class VisActionSeg():
 
         # return actions
 
+
 def vis_action_seg(actions):
     pass
     # Get unique labels
     # Assign colors
 
 
-
 def video_vis():
     # Create a VideoCapture object and read from input file
     f = r'C:\Users\test\Desktop\Leon\Datasets\Breakfast\BreakfastII_15fps_qvga_sync\P03\cam01\P03_cereals.avi'
     cap = cv2.VideoCapture(f)
-    
+
     # Check if camera opened successfully
-    if (cap.isOpened()== False):
+    if (cap.isOpened() == False):
         print("Error opening video file")
-    
+
     # Read until video is completed
-    while(cap.isOpened()):
-        
+    while (cap.isOpened()):
+
         # Capture frame-by-frame
         ret, frame = cap.read()
         if ret == True:
@@ -202,19 +218,19 @@ def video_vis():
             cv2.rectangle(frame, (100, 150), (500, 600),
                           (0, 255, 0), -1)
             cv2.imshow('Frame', frame)
-            
+
             # Press Q on keyboard to exit
             if cv2.waitKey(25) & 0xFF == ord('q'):
                 break
-    
+
         # Break the loop
         else:
             break
-    
+
     # When everything done, release
     # the video capture object
     cap.release()
-    
+
     # Closes all the frames
     cv2.destroyAllWindows()
 
@@ -235,6 +251,5 @@ if __name__ == '__main__':
 
     # survey(results, category_names, all_category)
     # plt.show()
-
 
     video_vis()
